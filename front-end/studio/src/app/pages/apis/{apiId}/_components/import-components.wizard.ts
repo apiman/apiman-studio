@@ -18,8 +18,10 @@
 import {Component, QueryList, ViewChildren} from "@angular/core";
 import {ModalDirective} from "ngx-bootstrap";
 import {ApisService} from "../../../../services/apis.service";
+import {ArtifactsService} from "../../../../services/artifacts.service";
 import {ImportedComponent} from "../editor/_models/imported-component.model";
 import {Api, ApiDefinition} from "../../../../models/api.model";
+import {Artifact, ArtifactDefinition} from "../../../../models/artifact.model";
 import {ComponentType} from "../editor/_models/component-type.model";
 import {DataTableColumn, DataTableRow} from "../../../../components/common/data-table.component";
 import * as moment from "moment";
@@ -46,15 +48,15 @@ export class ImportComponentsWizard {
     protected _isOpen: boolean = false;
 
     loading: boolean;
-    loadingApis: boolean;
+    loadingResources: boolean;
     loadingComponents: boolean;
     currentPage: string;
 
     type: ComponentType;
 
     private result: Promise<ImportedComponent[]>;
-    private allApis: Api[];
-    selectedApis: Api[];
+    private allResources: (Api | Artifact)[];
+    selectedResources: (Api | Artifact)[];
     mustLoadComponents: boolean = false;
     private components: ImportedComponent[];
     selectedComponents: ImportedComponent[];
@@ -73,8 +75,11 @@ export class ImportComponentsWizard {
     /**
      * Constructor with injection!
      * @param apis
+     * @param artifacts
+     * @param config
      */
-    constructor(private apis: ApisService) {}
+    constructor(private apis: ApisService,
+                private artifacts: ArtifactsService) {}
 
     /**
      * Called to open the wizard.
@@ -83,8 +88,8 @@ export class ImportComponentsWizard {
         this._isOpen = true;
 
         this.type = type;
-        this.allApis = [];
-        this.selectedApis = [];
+        this.allResources = [];
+        this.selectedResources = [];
         this.components = [];
         this.selectedComponents = [];
 
@@ -98,22 +103,29 @@ export class ImportComponentsWizard {
                 this.importComponentsModal.first.show();
             }
         });
-        this.loadingApis = true;
+        this.loadingResources = true;
         this.loading = true;
         this.currentPage = "resources";
 
-        this.apis.getApis().then( apis => {
-            console.debug("[ImportComponentsWizardComponent] APIs loaded.");
-            this.allApis = apis;
+
+        let promises: Promise<(Api|Artifact)[]>[] = [
+            this.apis.getApis(),
+            this.artifacts.getArtifacts()
+        ];
+
+        this.allResources = [];
+        Promise.all(promises).then(allResources => {
+            console.debug("[ImportComponentsWizardComponent] Resources loaded.");
+            allResources.forEach(resourcePartition => this.allResources.push(...resourcePartition))
             this.apiRows = this.resourceTableRows();
             this.loading = false;
-            this.loadingApis = false;
+            this.loadingResources = false;
         }).catch(error => {
-            console.error("[ImportComponentsWizardComponent] Error getting APIs");
+            console.error("[ImportComponentsWizardComponent] Error getting resources");
             this.error = error;
-            this.errorMessage = "Error getting your APIs.";
+            this.errorMessage = "Error getting your resources.";
             this.loading = false;
-            this.loadingApis = false;
+            this.loadingResources = false;
         });
 
         this.result = new Promise<ImportedComponent[]>((resolve, reject) => {
@@ -139,7 +151,7 @@ export class ImportComponentsWizard {
 
     /**
      * Returns true if the wizard is open.
-     * 
+     *
      */
     public isOpen(): boolean {
         return this._isOpen;
@@ -167,7 +179,7 @@ export class ImportComponentsWizard {
 
     public isPageValid(page: string): boolean {
         if (page === "resources") {
-            return this.selectedApis.length > 0;
+            return this.selectedResources.length > 0;
         }
         if (page === "components") {
             return this.selectedComponents.length > 0;
@@ -289,14 +301,14 @@ export class ImportComponentsWizard {
     }
 
     private resourceTableRows(): DataTableRow[] {
-        return this.allApis.map(api => {
+        return this.allResources.map(apiOrArtifact => {
             return {
-                value: api,
+                value: apiOrArtifact,
                 cells: [
-                    { displayName: api.name },
-                    { displayName: api.description },
-                    { displayName: api.type },
-                    { displayName: moment(api.createdOn).fromNow() }
+                    { displayName: apiOrArtifact.name },
+                    { displayName: apiOrArtifact.description },
+                    { displayName: apiOrArtifact.type },
+                    { displayName: moment(apiOrArtifact.createdOn).fromNow() }
                 ]
             };
         });
@@ -304,13 +316,23 @@ export class ImportComponentsWizard {
 
     private loadComponents(): void {
         this.components = [];
-        console.debug("[ImportComponentsWizard] Loading components from %o resources.", this.selectedApis.length);
-        let promises: Promise<ApiDefinition>[] = this.selectedApis.map( api => {
-            console.debug("[ImportComponentsWizard] Loading api definition for: ", api.name);
-            return this.apis.getApiDefinition(api.id).then(apiDef => {
-                this.processLoadedApiDef(apiDef);
-                return apiDef;
-            });
+        console.debug("[ImportComponentsWizard] Loading components from %o resources.", this.selectedResources.length);
+        let promises: Promise<ApiDefinition | ArtifactDefinition>[] = this.selectedResources.map(apiOrArtifact => {
+            if ("ARTIFACT" === apiOrArtifact.__resourceType) {
+                console.debug("[ImportComponentsWizard] Loading artifact definition for: ", apiOrArtifact.name);
+                return this.artifacts.getArtifactDefinition(apiOrArtifact.id).then(artifactDef => {
+                    this.processLoadedArtifactDef(artifactDef);
+                    return artifactDef;
+                });
+            } else if ("API" === apiOrArtifact.__resourceType) {
+                console.debug("[ImportComponentsWizard] Loading api definition for: ", apiOrArtifact.name);
+                return this.apis.getApiDefinition(apiOrArtifact.id).then(apiDef => {
+                    this.processLoadedApiDef(apiDef);
+                    return apiDef;
+                });
+            } else {
+                console.warn("[ImportComponentsWizard] Missing __resourceType field for resource named", apiOrArtifact.name);
+            }
         });
         Promise.all(promises).then(() => {
             console.debug("[ImportComponentsWizard] All resources loaded successfully.");
@@ -342,12 +364,43 @@ export class ImportComponentsWizard {
         });
     }
 
+    private processLoadedArtifactDef(artifactDefinition: ArtifactDefinition): void {
+        console.debug("[ImportComponentsWizard] Processing an Artifact def: ", artifactDefinition.name);
+        // TODO handle the other registry types as well
+        if (this.type === ComponentType.schema && artifactDefinition.type === "JSON") {
+            let $ref: string = `apicurio-registry:${ artifactDefinition.id }/${ artifactDefinition.version }#`;
+            this.components.push({
+                name: artifactDefinition.name,
+                $ref: $ref,
+                type: ComponentType.schema
+            });
+        } else if (artifactDefinition.type === "ASYNCAPI" || artifactDefinition.type === "OPENAPI") {
+            let doc: Document = Library.readDocument(artifactDefinition.spec);
+            let components: ImportedComponent[] = this.getArtifactComponents(artifactDefinition, doc);
+            components.forEach(component => {
+                this.components.push(component);
+            });
+        }
+        console.debug("[ImportComponentsWizard] Done processing Artifact def:", artifactDefinition.name);
+    }
+
     private getComponents(apiDef: ApiDefinition, doc: Document): ImportedComponent[] {
         let finder: ComponentFinder;
         if (doc.getDocumentType() == DocumentType.openapi2) {
             finder = new Oas20ComponentFinder(apiDef, this.type);
         } else {
             finder = new ComponentFinder(apiDef, this.type);
+        }
+        Library.visitTree(doc, finder, TraverserDirection.down);
+        return finder.foundComponents;
+    }
+
+    private getArtifactComponents(artifactDefinition: ArtifactDefinition, doc: Document): ImportedComponent[] {
+        let finder: ArtifactComponentFinder;
+        if (doc.getDocumentType() == DocumentType.openapi2) {
+            finder = new Oas20ArtifactComponentFinder(artifactDefinition, this.type);
+        } else {
+            finder = new ArtifactComponentFinder(artifactDefinition, this.type);
         }
         Library.visitTree(doc, finder, TraverserDirection.down);
         return finder.foundComponents;
@@ -444,6 +497,98 @@ class Oas20ComponentFinder extends ComponentFinder {
 
     constructor(apiDef: ApiDefinition, type: ComponentType) {
         super(apiDef, type);
+    }
+
+    protected getFragmentPrefix(): string {
+        switch (this.type) {
+            case ComponentType.schema:
+                return "#/definitions/";
+            case ComponentType.response:
+                return "#/responses/";
+            case ComponentType.parameter:
+                return "#/parameters/";
+            case ComponentType.securityScheme:
+                return "#/securityDefinitions/";
+        }
+    }
+}
+
+class ArtifactComponentFinder extends CombinedVisitorAdapter {
+
+    public foundComponents: ImportedComponent[] = [];
+
+    constructor(protected artifactDefinition: ArtifactDefinition, protected type: ComponentType) {
+        super();
+    }
+
+    protected componentFound(definition: IDefinition): void {
+        this.foundComponents.push(this.toImportedComponent(definition));
+    }
+
+    protected toImportedComponent(definition: IDefinition): ImportedComponent {
+        let $ref: string = `apicurio-registry:${ this.artifactDefinition.id }/${ this.artifactDefinition.version }${ this.getFragmentPrefix() + definition.getName() }`;
+        let component: ImportedComponent = {
+            name: definition.getName(),
+            $ref: $ref,
+            type: this.type,
+            from: {
+                name: this.artifactDefinition.name,
+                id: this.artifactDefinition.id
+            }
+        };
+        return component;
+    }
+
+    protected getFragmentPrefix(): string {
+        if (this.artifactDefinition.type === "JSON") {
+            return "#/";
+        }
+        switch (this.type) {
+            case ComponentType.schema:
+                return "#/components/schemas/";
+            case ComponentType.response:
+                return "#/components/responses/";
+            case ComponentType.parameter:
+                return "#/components/parameters/";
+            case ComponentType.header:
+                return "#/components/headers/";
+            case ComponentType.requestBody:
+                return "#/components/requestBodies/";
+            case ComponentType.callback:
+                return "#/components/callbacks/";
+            case ComponentType.example:
+                return "#/components/examples/";
+            case ComponentType.securityScheme:
+                return "#/components/securitySchemes/";
+            case ComponentType.link:
+                return "#/components/links/";
+            case ComponentType.messageTrait:
+                return "#/components/messageTraits";
+        }
+    }
+
+    visitSchemaDefinition(node: IDefinition): void {
+        if (this.type == ComponentType.schema) {
+            this.componentFound(node);
+        }
+    }
+
+    visitResponseDefinition(node: IDefinition): void {
+        if (this.type == ComponentType.response) {
+            this.componentFound(node);
+        }
+    }
+
+    visitMessageTraitDefinition(node: IDefinition): void {
+        if (this.type == ComponentType.messageTrait) {
+            this.componentFound(node);
+        }
+    }
+}
+class Oas20ArtifactComponentFinder extends ArtifactComponentFinder {
+
+    constructor(artifactDefinition: ArtifactDefinition, type: ComponentType) {
+        super(artifactDefinition, type);
     }
 
     protected getFragmentPrefix(): string {

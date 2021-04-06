@@ -29,6 +29,13 @@
             <artifactId>apicurio-data-models</artifactId>
         </dependency>
 
+        <!-- Apicurio Registry Rest Client -->
+        <dependency>
+            <groupId>io.apicurio</groupId>
+            <artifactId>apicurio-registry-rest-client</artifactId>
+            <version>${version.apicurio-registry}</version>
+        </dependency>
+
         <!-- Kafka (from Registry) -->
         <dependency>
             <groupId>io.apicurio</groupId>
