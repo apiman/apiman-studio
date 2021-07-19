@@ -17,6 +17,7 @@
 package io.apicurio.hub.core.storage.jdbc;
 
 import io.apicurio.hub.core.config.HubConfiguration;
+import javax.inject.Inject;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,15 +30,18 @@ import java.util.List;
  */
 public abstract class CommonSqlStatements implements ISqlStatements {
 
+    @Inject
+    private HubConfiguration config;
+
     private boolean shareForEveryone;
-    
+
     /**
      * Constructor.
      */
     public CommonSqlStatements(HubConfiguration config) {
         this.shareForEveryone = config.isShareForEveryone();
     }
-    
+
     /**
      * Returns the database type identifier.
      */
@@ -63,7 +67,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public List<String> databaseUpgrade(int fromVersion, int toVersion) {
         List<String> statements = new ArrayList<>();
         DdlParser parser = new DdlParser();
-        
+
         for (int version = fromVersion + 1; version <= toVersion; version++) {
             try (InputStream input = getClass().getResourceAsStream("upgrade-" + version + "_" + dbType() + ".ddl")) {
                 statements.addAll(parser.parse(input));
@@ -71,10 +75,10 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 throw new RuntimeException(e);
             }
         }
-        
+
         return statements;
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#getDatabaseVersion()
      */
@@ -90,7 +94,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertLinkedAccount() {
         return "INSERT INTO accounts (user_id, type, linked_on, used_on, nonce) VALUES (?, ?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectLinkedAccountByType()
      */
@@ -98,7 +102,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectLinkedAccountByType() {
         return "SELECT a.* FROM accounts a WHERE a.user_id = ? AND a.type = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#updateLinkedAccount()
      */
@@ -114,7 +118,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectLinkedAccounts() {
         return "SELECT a.* FROM accounts a WHERE a.user_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteLinkedAccount()
      */
@@ -122,7 +126,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteLinkedAccount() {
         return "DELETE FROM accounts WHERE user_id = ? AND type = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteLinkedAccounts()
      */
@@ -138,7 +142,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertApiDesign() {
         return "INSERT INTO api_designs (name, description, created_by, created_on, tags, api_type) VALUES (?, ?, ?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteApiDesign()
      */
@@ -146,20 +150,38 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteApiDesign() {
         return "DELETE FROM api_designs WHERE id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectApiDesigns()
      */
     @Override
     public String selectApiDesigns() {
-    	if (shareForEveryone) {
-    		return "SELECT d.* FROM api_designs d";
-    	}
+        if (shareForEveryone) {
+            return "SELECT d.* FROM api_designs d";
+        }
         return "SELECT d.* FROM api_designs d JOIN acl a ON a.design_id = d.id WHERE a.user_id = ?";
     }
-    
+
     @Override
     public String selectRecentApiDesigns() {
+        // If datasource is Azure SQL
+        if(config.getJdbcType().equals("azuresql")) {
+            if (shareForEveryone) {
+                return "SELECT TOP 5 c.design_id, MAX(c.version) AS version "
+                        + "FROM api_content c "
+                        + "WHERE c.created_by = ? "
+                        + "GROUP BY c.design_id "
+                        + "ORDER BY version DESC ";
+            } else {
+                return "SELECT TOP 5 c.design_id, MAX(c.version) AS version "
+                        + "FROM api_content c "
+                        + "JOIN acl a ON a.design_id = c.design_id "
+                        + "WHERE a.user_id = ? AND c.created_by = ? "
+                        + "GROUP BY c.design_id "
+                        + "ORDER BY version DESC ";
+            }
+        }
+
         if (shareForEveryone) {
             return "SELECT c.design_id, MAX(c.version) AS version "
                     + "FROM api_content c "
@@ -183,12 +205,12 @@ public abstract class CommonSqlStatements implements ISqlStatements {
      */
     @Override
     public String selectApiDesignById() {
-    	if (shareForEveryone) {
-    		return "SELECT d.* FROM api_designs d WHERE d.id = ?";
-    	}
+        if (shareForEveryone) {
+            return "SELECT d.* FROM api_designs d WHERE d.id = ?";
+        }
         return "SELECT d.* FROM api_designs d JOIN acl a ON a.design_id = d.id WHERE d.id = ? AND a.user_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#updateApiDesign()
      */
@@ -196,7 +218,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String updateApiDesign() {
         return "UPDATE api_designs SET name = ?, description = ?, tags = ? WHERE id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#insertContent()
      */
@@ -204,7 +226,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertContent() {
         return "INSERT INTO api_content (design_id, type, data, created_by, created_on) VALUES (?, ?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#undoContent()
      */
@@ -212,7 +234,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String undoContent() {
         return "UPDATE api_content SET reverted = 1, modified_on = ? WHERE reverted = 0 AND created_by = ? AND design_id = ? AND version = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#redoContent()
      */
@@ -220,7 +242,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String redoContent() {
         return "UPDATE api_content SET reverted = 0, modified_on = ? WHERE reverted = 1 AND created_by = ? AND design_id = ? AND version = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#insertAcl()
      */
@@ -228,7 +250,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertAcl() {
         return "INSERT INTO acl (user_id, design_id, role) VALUES (?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteAcl()
      */
@@ -236,7 +258,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteAcl() {
         return "DELETE FROM acl WHERE user_id = ? AND design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#updateAcl()
      */
@@ -252,7 +274,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String clearContent() {
         return "DELETE FROM api_content WHERE design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#clearAcl()
      */
@@ -268,7 +290,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String clearInvitations() {
         return "DELETE FROM acl_invites WHERE design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#hasOwnerPermission()
      */
@@ -278,7 +300,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 + "FROM acl a "
                 + "WHERE a.design_id = ? AND a.user_id = ? AND a.role = 'owner'";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#hasWritePermission()
      */
@@ -288,7 +310,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 + "FROM acl a "
                 + "WHERE a.design_id = ? AND a.user_id = ? AND (a.role = 'owner' OR a.role = 'collaborator')";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectPermissions()
      */
@@ -296,7 +318,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectPermissions() {
         return "SELECT a.* FROM acl a WHERE a.design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectApiDesignContributors()
      */
@@ -316,30 +338,56 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                     + "GROUP BY c.created_by";
         }
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectLatestContentDocument()
      */
     @Override
     public String selectLatestContentDocument() {
-    	if (shareForEveryone) {
-    		return "SELECT c.* "
+        // If datasource is Azure SQL
+        if (config.getJdbcType().equals("azuresql")) {
+            if (shareForEveryone) {
+                return "SELECT TOP 1 c.* "
+                        + "FROM api_content c "
+                        + "WHERE c.design_id = ? AND c.type = 0 "
+                        + "ORDER BY c.version DESC";
+            }
+            return "SELECT TOP 1 c.* "
+                    + "FROM api_content c "
+                    + "JOIN acl a ON a.design_id = c.design_id "
+                    + "WHERE c.design_id = ? AND c.type = 0 AND a.user_id = ? "
+                    + "ORDER BY c.version DESC";
+
+        }
+
+        if (shareForEveryone) {
+            return "SELECT c.* "
                     + "FROM api_content c "
                     + "WHERE c.design_id = ? AND c.type = 0 "
                     + "ORDER BY c.version DESC LIMIT 1";
-    	}
+        }
         return "SELECT c.* "
                 + "FROM api_content c "
                 + "JOIN acl a ON a.design_id = c.design_id "
                 + "WHERE c.design_id = ? AND c.type = 0 AND a.user_id = ? "
                 + "ORDER BY c.version DESC LIMIT 1";
+
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectLatestContentDocumentForSharing()
      */
     @Override
     public String selectLatestContentDocumentForSharing() {
+        // If datasource is AzureSQL
+        if (config.getJdbcType().equals("azuresql")) {
+            return "SELECT TOP 1 c.* "
+                    + "FROM api_content c "
+                    + "JOIN sharing s ON s.design_id = c.design_id "
+                    + "WHERE s.uuid = ? AND s.level = 'DOCUMENTATION' AND c.type = 0 "
+                    + "ORDER BY c.version DESC";
+        }
+
         return "SELECT c.* "
                 + "FROM api_content c "
                 + "JOIN sharing s ON s.design_id = c.design_id "
@@ -352,6 +400,14 @@ public abstract class CommonSqlStatements implements ISqlStatements {
      */
     @Override
     public String selectLatestContentCommand() {
+        // If datasource is AzureSQL
+        if (config.getJdbcType().equals("azuresql")) {
+            return "SELECT TOP 1 c.* "
+                    + "FROM api_content c "
+                    + "WHERE c.design_id = ? AND c.type = 1 "
+                    + "ORDER BY c.version DESC";
+        }
+
         return "SELECT c.* "
                 + "FROM api_content c "
                 + "WHERE c.design_id = ? AND c.type = 1 "
@@ -363,19 +419,19 @@ public abstract class CommonSqlStatements implements ISqlStatements {
      */
     @Override
     public String selectContentCommands() {
-    	if (shareForEveryone) {
-    		return "SELECT c.* "
+        if (shareForEveryone) {
+            return "SELECT c.* "
                     + "FROM api_content c "
                     + "WHERE c.reverted = 0 AND c.design_id = ? AND c.type = 1 AND c.version > ? "
                     + "ORDER BY c.version ASC";
-    	}
+        }
         return "SELECT c.* "
                 + "FROM api_content c "
                 + "JOIN acl a ON a.design_id = c.design_id "
                 + "WHERE c.reverted = 0 AND c.design_id = ? AND c.type = 1 AND c.version > ? AND a.user_id = ? "
                 + "ORDER BY c.version ASC";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectAllContentCommands()
      */
@@ -393,7 +449,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 + "WHERE c.design_id = ? AND c.type = 1 AND a.user_id = ? AND c.version > ? "
                 + "ORDER BY c.version ASC";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#insertEditingSessionUuid()
      */
@@ -401,7 +457,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertEditingSessionUuid() {
         return "INSERT INTO session_uuids (uuid, design_id, user_id, secret, version, expires_on) VALUES (?, ?, ?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectEditingSessionUuid()
      */
@@ -411,7 +467,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 + "FROM session_uuids u "
                 + "WHERE u.uuid = ? AND u.design_id = ? AND u.secret = ? AND u.expires_on > ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#updateCollaborationInvitationStatus()
      */
@@ -419,16 +475,16 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String updateCollaborationInvitationStatus() {
         return "UPDATE acl_invites SET status = ?, modified_by = ?, modified_on = ? WHERE invite_id = ? AND status = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#insertCollaborationInvitation()
      */
     @Override
     public String insertCollaborationInvitation() {
         return "INSERT INTO acl_invites (created_by, created_on, created_by_display, design_id, role, invite_id, status, subject) "
-                  + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectCollaborationInvitations()
      */
@@ -439,7 +495,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 + "JOIN acl a ON a.design_id = i.design_id "
                 + "WHERE i.design_id = ? AND a.user_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectCollaborationInvitation()
      */
@@ -449,7 +505,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
                 + "FROM acl_invites i "
                 + "WHERE i.design_id = ? AND i.invite_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteEditingSessionUuid()
      */
@@ -463,39 +519,71 @@ public abstract class CommonSqlStatements implements ISqlStatements {
      */
     @Override
     public String selectApiDesignActivity() {
+        // If datasource is AzureSQL
+        if(config.getJdbcType().equals("azuresql")) {
+            return "SELECT c.*, d.name "
+                    + "FROM api_content c "
+                    + "JOIN api_designs d ON d.id = c.design_id "
+                    + "WHERE c.design_id = ? "
+                    + "  AND (c.type = 1 OR c.type = 2 OR c.type = 3) "
+                    + "  AND c.reverted = 0 "
+                    + "ORDER BY created_on DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY ";
+        }
+
         return "SELECT c.*, d.name "
-        		+ "FROM api_content c "
+                + "FROM api_content c "
                 + "JOIN api_designs d ON d.id = c.design_id "
-        		+ "WHERE c.design_id = ? "
-        		+ "  AND (c.type = 1 OR c.type = 2 OR c.type = 3) "
-        		+ "  AND c.reverted = 0 "
-        		+ "ORDER BY created_on DESC LIMIT ? OFFSET ?";
+                + "WHERE c.design_id = ? "
+                + "  AND (c.type = 1 OR c.type = 2 OR c.type = 3) "
+                + "  AND c.reverted = 0 "
+                + "ORDER BY created_on DESC LIMIT ? OFFSET ?";
     }
 
     @Override
     public String selectUserActivity() {
+        // If datasource is AzureSQL
+        if(config.getJdbcType().equals("azuresql")) {
+            return "SELECT c.*, d.name "
+                    + "FROM api_content c "
+                    + "JOIN api_designs d ON d.id = c.design_id "
+                    + "WHERE c.created_by = ? "
+                    + "  AND (c.type = 1 OR c.type = 2 OR c.type = 3) "
+                    + "  AND c.reverted = 0 "
+                    + "ORDER BY created_on DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+        }
+
         return "SELECT c.*, d.name "
-        		+ "FROM api_content c "
+                + "FROM api_content c "
                 + "JOIN api_designs d ON d.id = c.design_id "
-        		+ "WHERE c.created_by = ? "
-        		+ "  AND (c.type = 1 OR c.type = 2 OR c.type = 3) "
-        		+ "  AND c.reverted = 0 "
-        		+ "ORDER BY created_on DESC LIMIT ? OFFSET ?";
+                + "WHERE c.created_by = ? "
+                + "  AND (c.type = 1 OR c.type = 2 OR c.type = 3) "
+                + "  AND c.reverted = 0 "
+                + "ORDER BY created_on DESC LIMIT ? OFFSET ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectApiPublicationActivity()
      */
     @Override
     public String selectApiPublicationActivity() {
+        // If datasource is AzureSQL
+        if(config.getJdbcType().equals("azuresql")) {
+            return "SELECT c.* FROM api_content c WHERE c.design_id = ? AND c.type = 2 ORDER BY created_on DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+        }
+
         return "SELECT c.* FROM api_content c WHERE c.design_id = ? AND c.type = 2 ORDER BY created_on DESC LIMIT ? OFFSET ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectApiPublicationActivityByUser()
      */
     @Override
     public String selectApiPublicationActivityByUser() {
+        // If datasource is AzureSQL
+        if(config.getJdbcType().equals("azuresql")) {
+            return "SELECT c.* FROM api_content c WHERE c.design_id = ? AND c.created_by = ? AND c.type = 2 ORDER BY created_on DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+        }
+
         return "SELECT c.* FROM api_content c WHERE c.design_id = ? AND c.created_by = ? AND c.type = 2 ORDER BY created_on DESC LIMIT ? OFFSET ?";
     }
 
@@ -504,6 +592,11 @@ public abstract class CommonSqlStatements implements ISqlStatements {
      */
     @Override
     public String selectApiMockActivity() {
+        // If datasource is AzureSQL
+        if(config.getJdbcType().equals("azuresql")) {
+            return "SELECT c.* FROM api_content c WHERE c.design_id = ? AND c.type = 3 ORDER BY created_on DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+        }
+
         return "SELECT c.* FROM api_content c WHERE c.design_id = ? AND c.type = 3 ORDER BY created_on DESC LIMIT ? OFFSET ?";
     }
 
@@ -514,7 +607,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectCodegenProjects() {
         return "SELECT c.* FROM codegen c WHERE c.design_id = ? ORDER BY c.modified_on DESC";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectCodegenProject()
      */
@@ -522,7 +615,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectCodegenProject() {
         return "SELECT c.* FROM codegen c WHERE c.design_id = ? AND c.id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#insertCodegenProject()
      */
@@ -530,7 +623,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertCodegenProject() {
         return "INSERT INTO codegen (created_by, created_on, modified_by, modified_on, design_id, ptype, attributes) VALUES (?, ?, ?, ?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#updateCodegenProject()
      */
@@ -538,7 +631,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String updateCodegenProject() {
         return "UPDATE codegen SET modified_by = ?, modified_on = ?, ptype = ?, attributes = ? WHERE id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteCodegenProject()
      */
@@ -546,7 +639,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteCodegenProject() {
         return "DELETE FROM codegen WHERE id = ? AND design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteCodegenProjects()
      */
@@ -554,7 +647,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteCodegenProjects() {
         return "DELETE FROM codegen WHERE design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectValidationProfiles()
      */
@@ -562,7 +655,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectValidationProfiles() {
         return "SELECT * FROM validation_profiles WHERE owner = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#insertValidationProfile()
      */
@@ -570,7 +663,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String insertValidationProfile() {
         return "INSERT INTO validation_profiles (owner, name, description, severities) VALUES (?, ?, ?, ?)";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#updateValidationProfile()
      */
@@ -578,7 +671,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String updateValidationProfile() {
         return "UPDATE validation_profiles SET name = ?, description = ?, severities = ? WHERE id = ? AND owner = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteValidationProfile()
      */
@@ -586,7 +679,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteValidationProfile() {
         return "DELETE FROM validation_profiles WHERE id = ? AND owner = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#deleteSharingConfig()
      */
@@ -594,7 +687,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String deleteSharingConfig() {
         return "DELETE FROM sharing WHERE design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectSharingConfig()
      */
@@ -602,7 +695,7 @@ public abstract class CommonSqlStatements implements ISqlStatements {
     public String selectSharingConfig() {
         return "SELECT * FROM sharing WHERE design_id = ?";
     }
-    
+
     /**
      * @see io.apicurio.hub.core.storage.jdbc.ISqlStatements#selectSharingInfo()
      */
